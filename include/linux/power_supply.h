@@ -18,6 +18,7 @@
 #include <linux/leds.h>
 #include <linux/spinlock.h>
 #include <linux/notifier.h>
+#include <linux/types.h>
 
 /*
  * All voltages, currents, charges, energies, time and temperatures in uV,
@@ -38,6 +39,7 @@ enum {
 	POWER_SUPPLY_STATUS_DISCHARGING,
 	POWER_SUPPLY_STATUS_NOT_CHARGING,
 	POWER_SUPPLY_STATUS_FULL,
+	POWER_SUPPLY_STATUS_CMD_DISCHARGING,
 };
 
 enum {
@@ -148,10 +150,50 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_SCOPE,
 	POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT,
 	POWER_SUPPLY_PROP_CALIBRATE,
+	/* Local extensions */
+	POWER_SUPPLY_PROP_USB_HC,
+	POWER_SUPPLY_PROP_USB_OTG,
+	POWER_SUPPLY_PROP_CHARGE_ENABLED,
+	/* Local extensions of type int64_t */
+	POWER_SUPPLY_PROP_CHARGE_COUNTER_EXT,
+	/* Add for battery voltage/temp */
+	POWER_SUPPLY_PROP_batt_vol,
+	POWER_SUPPLY_PROP_batt_temp,
+	/* Add for EM */
+	POWER_SUPPLY_PROP_TemperatureR,
+	POWER_SUPPLY_PROP_TempBattVoltage,
+	POWER_SUPPLY_PROP_InstatVolt,
+	POWER_SUPPLY_PROP_BatteryAverageCurrent,
+	POWER_SUPPLY_PROP_BatterySenseVoltage,
+	POWER_SUPPLY_PROP_ISenseVoltage,
+	POWER_SUPPLY_PROP_ChargerVoltage,
+/* CEI comment start, FP22589 Prevent swelling */
+	POWER_SUPPLY_PROP_ENABLE_LLK,
+/* CEI comment end, FP22589 Prevent swelling */
+//CEI comment start, BATTERY_CARE//
+#if defined(CONFIG_BUILD_TEAK) // teak
+	POWER_SUPPLY_PROP_SMART_CHARGING_ACTIVATION,
+	POWER_SUPPLY_PROP_SMART_CHARGING_INTERRUPTION,
+	POWER_SUPPLY_PROP_SMART_CHARGING_STATUS,
+#endif
+//CEI comment end, BATTERY_CARE//
+	/* Dual battery */
+	POWER_SUPPLY_PROP_status_smb,
+	POWER_SUPPLY_PROP_capacity_smb,
+	POWER_SUPPLY_PROP_present_smb,
+	/* ADB CMD Discharging */
+	POWER_SUPPLY_PROP_adjust_power,
+#ifdef CONFIG_CHARGER_QNS
+	POWER_SUPPLY_PROP_MAX_CHARGE_CURRENT,
+#endif
 	/* Properties of type `const char *' */
 	POWER_SUPPLY_PROP_MODEL_NAME,
 	POWER_SUPPLY_PROP_MANUFACTURER,
 	POWER_SUPPLY_PROP_SERIAL_NUMBER,
+#ifdef CONFIG_CHARGER_QNS
+	POWER_SUPPLY_PROP_BATTERY_TYPE,
+#endif
+
 };
 
 enum power_supply_type {
@@ -163,6 +205,7 @@ enum power_supply_type {
 	POWER_SUPPLY_TYPE_USB_DCP,	/* Dedicated Charging Port */
 	POWER_SUPPLY_TYPE_USB_CDP,	/* Charging Downstream Port */
 	POWER_SUPPLY_TYPE_USB_ACA,	/* Accessory Charger Adapters */
+	POWER_SUPPLY_TYPE_WIRELESS,	/* Wireless Charger */
 };
 
 enum power_supply_notifier_events {
@@ -172,6 +215,7 @@ enum power_supply_notifier_events {
 union power_supply_propval {
 	int intval;
 	const char *strval;
+	int64_t int64val;
 };
 
 struct device_node;

@@ -31,6 +31,7 @@
 #include <linux/perf_event.h>
 #include <linux/preempt.h>
 
+#include <asm/alternative.h>
 #include <asm/bug.h>
 #include <asm/cpufeature.h>
 #include <asm/exception.h>
@@ -40,6 +41,17 @@
 #include <asm/system_misc.h>
 #include <asm/pgtable.h>
 #include <asm/tlbflush.h>
+#include <mt-plat/mtk_hooks.h>
+
+#ifdef CONFIG_CCI_KLOG
+#include <linux/cciklog.h>
+
+#ifdef CCI_KLOG_CRASH_SIZE
+#if CCI_KLOG_CRASH_SIZE
+extern void set_fault_state(int level, int type, const char* msg);
+#endif // #if CCI_KLOG_CRASH_SIZE
+#endif // #ifdef CCI_KLOG_CRASH_SIZE
+#endif // #ifdef CONFIG_CCI_KLOG
 
 static const char *fault_name(unsigned int esr);
 
@@ -119,6 +131,7 @@ int ptep_set_access_flags(struct vm_area_struct *vma,
 	 * hardware update of the access/dirty state.
 	 */
 	asm volatile("//	ptep_set_access_flags\n"
+	ALTERNATIVE("nop", "dmb sy", ARM64_WORKAROUND_855872)
 	"	prfm	pstl1strm, %2\n"
 	"1:	ldxr	%0, %2\n"
 	"	and	%0, %0, %3		// clear PTE_RDONLY\n"
@@ -133,22 +146,39 @@ int ptep_set_access_flags(struct vm_area_struct *vma,
 }
 #endif
 
+static bool is_el1_instruction_abort(unsigned int esr)
+{
+	return ESR_ELx_EC(esr) == ESR_ELx_EC_IABT_CUR;
+}
+
 /*
  * The kernel tried to access some page that wasn't present.
  */
 static void __do_kernel_fault(struct mm_struct *mm, unsigned long addr,
 			      unsigned int esr, struct pt_regs *regs)
 {
+#ifdef CCI_KLOG_CRASH_SIZE
+#if CCI_KLOG_CRASH_SIZE
+	int level = FAULT_LEVEL_DATA_ABORT_64;
+	int type = esr & 63;
+#endif // #if CCI_KLOG_CRASH_SIZE
+#endif // #ifdef CCI_KLOG_CRASH_SIZE
 	/*
 	 * Are we prepared to handle this kernel fault?
+	 * We are almost certainly not prepared to handle instruction faults.
 	 */
-	if (fixup_exception(regs))
+	if (!is_el1_instruction_abort(esr) && fixup_exception(regs))
 		return;
 
 	/*
 	 * No handler, we'll have to terminate things with extreme prejudice.
 	 */
 	bust_spinlocks(1);
+#ifdef CCI_KLOG_CRASH_SIZE
+#if CCI_KLOG_CRASH_SIZE
+	set_fault_state(level, type, fault_name(esr));
+#endif // #if CCI_KLOG_CRASH_SIZE
+#endif // #ifdef CCI_KLOG_CRASH_SIZE
 	pr_alert("Unable to handle kernel %s at virtual address %08lx\n",
 		 (addr < PAGE_SIZE) ? "NULL pointer dereference" :
 		 "paging request", addr);
@@ -168,6 +198,19 @@ static void __do_user_fault(struct task_struct *tsk, unsigned long addr,
 			    struct pt_regs *regs)
 {
 	struct siginfo si;
+
+#ifdef CCI_KLOG_CRASH_SIZE
+#if CCI_KLOG_CRASH_SIZE
+	int level = FAULT_LEVEL_DATA_ABORT_64;
+	int type = esr & 63;
+
+	kprintk("err_code=0x%X, fault_level=0x%X, fault_type=%d, fault_msg=%s\n", code, level, type, fault_name(esr));
+#endif // #if CCI_KLOG_CRASH_SIZE
+#endif // #ifdef CCI_KLOG_CRASH_SIZE
+
+
+	if (!mem_fault_debug_hook(regs))
+		return;
 
 	if (unhandled_signal(tsk, sig) && show_unhandled_signals_ratelimited()) {
 		pr_info("%s[%d]: unhandled %s (%d) at 0x%08lx, esr 0x%03x\n",
@@ -203,8 +246,6 @@ static void do_bad_area(unsigned long addr, unsigned int esr, struct pt_regs *re
 
 #define VM_FAULT_BADMAP		0x010000
 #define VM_FAULT_BADACCESS	0x020000
-
-#define ESR_LNX_EXEC		(1 << 24)
 
 static int __do_page_fault(struct mm_struct *mm, unsigned long addr,
 			   unsigned int mm_flags, unsigned long vm_flags,
@@ -244,6 +285,26 @@ out:
 	return fault;
 }
 
+static inline bool is_permission_fault(unsigned int esr, struct pt_regs *regs)
+{
+	unsigned int ec       = ESR_ELx_EC(esr);
+	unsigned int fsc_type = esr & ESR_ELx_FSC_TYPE;
+
+	if (ec != ESR_ELx_EC_DABT_CUR && ec != ESR_ELx_EC_IABT_CUR)
+		return false;
+
+	if (system_uses_ttbr0_pan())
+		return fsc_type == ESR_ELx_FSC_FAULT &&
+			(regs->pstate & PSR_PAN_BIT);
+	else
+		return fsc_type == ESR_ELx_FSC_PERM;
+}
+
+static bool is_el0_instruction_abort(unsigned int esr)
+{
+	return ESR_ELx_EC(esr) == ESR_ELx_EC_IABT_LOW;
+}
+
 static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 				   struct pt_regs *regs)
 {
@@ -270,19 +331,24 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 	if (user_mode(regs))
 		mm_flags |= FAULT_FLAG_USER;
 
-	if (esr & ESR_LNX_EXEC) {
+	if (is_el0_instruction_abort(esr)) {
 		vm_flags = VM_EXEC;
 	} else if ((esr & ESR_ELx_WNR) && !(esr & ESR_ELx_CM)) {
 		vm_flags = VM_WRITE;
 		mm_flags |= FAULT_FLAG_WRITE;
 	}
 
-	/*
-	 * PAN bit set implies the fault happened in kernel space, but not
-	 * in the arch's user access functions.
-	 */
-	if (IS_ENABLED(CONFIG_ARM64_PAN) && (regs->pstate & PSR_PAN_BIT))
-		goto no_context;
+	if (addr < USER_DS && is_permission_fault(esr, regs)) {
+		/* regs->orig_addr_limit may be 0 if we entered from EL0 */
+		if (regs->orig_addr_limit == KERNEL_DS)
+			die("Accessing user space memory with fs=KERNEL_DS", regs, esr);
+
+		if (is_el1_instruction_abort(esr))
+			die("Attempting to execute userspace memory", regs, esr);
+
+		if (!search_exception_tables(regs->pc))
+			die("Accessing user space memory outside uaccess.h routines", regs, esr);
+	}
 
 	/*
 	 * As per x86, we may deadlock here. However, since the kernel only
@@ -423,6 +489,13 @@ static int __kprobes do_translation_fault(unsigned long addr,
 	return 0;
 }
 
+static int do_alignment_fault(unsigned long addr, unsigned int esr,
+			      struct pt_regs *regs)
+{
+	do_bad_area(addr, esr, regs);
+	return 0;
+}
+
 /*
  * This abort handler always returns "fault".
  */
@@ -470,7 +543,7 @@ static struct fault_info {
 	{ do_bad,		SIGBUS,  0,		"synchronous parity error (translation table walk)" },
 	{ do_bad,		SIGBUS,  0,		"synchronous parity error (translation table walk)" },
 	{ do_bad,		SIGBUS,  0,		"unknown 32"			},
-	{ do_bad,		SIGBUS,  BUS_ADRALN,	"alignment fault"		},
+	{ do_alignment_fault,	SIGBUS,  BUS_ADRALN,	"alignment fault"		},
 	{ do_bad,		SIGBUS,  0,		"unknown 34"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 35"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 36"			},
@@ -585,6 +658,22 @@ void __init hook_debug_fault_code(int nr,
 	debug_fault_info[nr].name	= name;
 }
 
+
+#ifdef CONFIG_MEDIATEK_SOLUTION
+void __init hook_fault_code(int nr,
+			    int (*fn)(unsigned long, unsigned int, struct pt_regs *),
+			    int sig, int code, const char *name)
+{
+	BUG_ON(nr < 0 || nr >= ARRAY_SIZE(fault_info));
+
+	fault_info[nr].fn   = fn;
+	fault_info[nr].sig  = sig;
+	fault_info[nr].code = code;
+	fault_info[nr].name = name;
+}
+#endif
+
+
 asmlinkage int __exception do_debug_exception(unsigned long addr,
 					      unsigned int esr,
 					      struct pt_regs *regs)
@@ -621,3 +710,17 @@ int cpu_enable_pan(void *__unused)
 	return 0;
 }
 #endif /* CONFIG_ARM64_PAN */
+
+#ifdef CONFIG_ARM64_UAO
+/*
+ * Kernel threads have fs=KERNEL_DS by default, and don't need to call
+ * set_fs(), devtmpfs in particular relies on this behaviour.
+ * We need to enable the feature at runtime (instead of adding it to
+ * PSR_MODE_EL1h) as the feature may not be implemented by the cpu.
+ */
+int cpu_enable_uao(void *__unused)
+{
+	asm(SET_PSTATE_UAO(1));
+	return 0;
+}
+#endif /* CONFIG_ARM64_UAO */

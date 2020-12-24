@@ -4423,6 +4423,10 @@ int sctp_do_peeloff(struct sock *sk, sctp_assoc_t id, struct socket **sockp)
 	struct socket *sock;
 	int err = 0;
 
+    /* Do not peel off from one netns to another one. */
+    if (!net_eq(current->nsproxy->net_ns, sock_net(sk)))
+        return -EINVAL;
+
 	if (!asoc)
 		return -EINVAL;
 
@@ -4907,7 +4911,7 @@ static int sctp_getsockopt_local_addrs(struct sock *sk, int len,
 	struct sctp_sockaddr_entry *addr;
 	void __user *to;
 	union sctp_addr temp;
-	struct sctp_sock *sp = sctp_sk(sk);
+	struct sctp_sock *sp = sctp_sk(sk);4
 	int addrlen;
 	int err = 0;
 	size_t space_left;

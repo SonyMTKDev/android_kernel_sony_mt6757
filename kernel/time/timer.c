@@ -54,6 +54,10 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/timer.h>
 
+#ifdef CONFIG_MTK_SCHED_MONITOR
+#include "mtk_sched_mon.h"
+#endif
+
 __visible u64 jiffies_64 __cacheline_aligned_in_smp = INITIAL_JIFFIES;
 
 EXPORT_SYMBOL(jiffies_64);
@@ -764,8 +768,15 @@ static struct tvec_base *lock_timer_base(struct timer_list *timer,
 	__acquires(timer->base->lock)
 {
 	for (;;) {
-		u32 tf = timer->flags;
+		u32 tf;
 		struct tvec_base *base;
+
+		/*
+		 * We need to use READ_ONCE() here, otherwise the compiler
+		 * might re-read @tf between the check for TIMER_MIGRATING
+		 * and spin_lock().
+		 */
+		tf = READ_ONCE(timer->flags);
 
 		if (!(tf & TIMER_MIGRATING)) {
 			base = per_cpu_ptr(&tvec_bases, tf & TIMER_CPUMASK);
@@ -1175,7 +1186,13 @@ static void call_timer_fn(struct timer_list *timer, void (*fn)(unsigned long),
 	lock_map_acquire(&lockdep_map);
 
 	trace_timer_expire_entry(timer);
+#ifdef CONFIG_MTK_SCHED_MONITOR
+	mt_trace_sft_start(fn);
+#endif
 	fn(data);
+#ifdef CONFIG_MTK_SCHED_MONITOR
+	mt_trace_sft_end(fn);
+#endif
 	trace_timer_expire_exit(timer);
 
 	lock_map_release(&lockdep_map);
@@ -1698,10 +1715,10 @@ EXPORT_SYMBOL(msleep_interruptible);
 static void __sched do_usleep_range(unsigned long min, unsigned long max)
 {
 	ktime_t kmin;
-	unsigned long delta;
+	u64 delta;
 
 	kmin = ktime_set(0, min * NSEC_PER_USEC);
-	delta = (max - min) * NSEC_PER_USEC;
+	delta = (u64)(max - min) * NSEC_PER_USEC;
 	schedule_hrtimeout_range(&kmin, delta, HRTIMER_MODE_REL);
 }
 

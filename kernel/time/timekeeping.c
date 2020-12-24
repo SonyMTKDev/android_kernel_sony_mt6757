@@ -24,9 +24,14 @@
 #include <linux/pvclock_gtod.h>
 #include <linux/compiler.h>
 
+#include <mt-plat/mtk_ccci_common.h>
 #include "tick-internal.h"
 #include "ntp_internal.h"
 #include "timekeeping_internal.h"
+
+#ifdef CONFIG_RAMDUMP_TAGS
+#include <linux/rdtags.h>
+#endif
 
 #define TK_CLEAR_NTP		(1 << 0)
 #define TK_MIRROR		(1 << 1)
@@ -442,6 +447,35 @@ u64 ktime_get_raw_fast_ns(void)
 }
 EXPORT_SYMBOL_GPL(ktime_get_raw_fast_ns);
 
+/**
+ * ktime_get_boot_fast_ns - NMI safe and fast access to boot clock.
+ *
+ * To keep it NMI safe since we're accessing from tracing, we're not using a
+ * separate timekeeper with updates to monotonic clock and boot offset
+ * protected with seqlocks. This has the following minor side effects:
+ *
+ * (1) Its possible that a timestamp be taken after the boot offset is updated
+ * but before the timekeeper is updated. If this happens, the new boot offset
+ * is added to the old timekeeping making the clock appear to update slightly
+ * earlier:
+ *    CPU 0                                        CPU 1
+ *    timekeeping_inject_sleeptime64()
+ *    __timekeeping_inject_sleeptime(tk, delta);
+ *                                                 timestamp();
+ *    timekeeping_update(tk, TK_CLEAR_NTP...);
+ *
+ * (2) On 32-bit systems, the 64-bit boot offset (tk->offs_boot) may be
+ * partially updated.  Since the tk->offs_boot update is a rare event, this
+ * should be a rare occurrence which postprocessing should be able to handle.
+ */
+u64 notrace ktime_get_boot_fast_ns(void)
+{
+	struct timekeeper *tk = &tk_core.timekeeper;
+
+	return (ktime_get_mono_fast_ns() + ktime_to_ns(tk->offs_boot));
+}
+EXPORT_SYMBOL_GPL(ktime_get_boot_fast_ns);
+
 /* Suspend-time cycles value for halted fast timekeeper. */
 static cycle_t cycles_at_suspend;
 
@@ -841,6 +875,18 @@ void ktime_get_ts64(struct timespec64 *ts)
 }
 EXPORT_SYMBOL_GPL(ktime_get_ts64);
 
+#ifdef CONFIG_RAMDUMP_TAGS
+int timekeeping_ramdump_setup(void)
+{
+	int count = 0;
+
+	if (!rdtags_tag_symbol(tk_core))
+		count++;
+
+	return count;
+}
+#endif
+
 /**
  * ktime_get_seconds - Get the seconds portion of CLOCK_MONOTONIC
  *
@@ -984,7 +1030,7 @@ out:
 
 	/* signal hrtimers about time change */
 	clock_was_set();
-
+	notify_time_update();
 	return ret;
 }
 EXPORT_SYMBOL(do_settimeofday64);

@@ -508,6 +508,16 @@ config AXP20X_POWER
 	  This driver provides support for the power supply features of
 	  AXP20x PMIC.
 
+config BUILD_TEAK
+	bool "BUILD teak support"
+	default n
+
+config CHARGER_QNS
+	bool "QNS support"
+	default n
+
+source "drivers/power/mediatek/Kconfig"
+
 source "drivers/power/reset/Kconfig"
 
 endif # POWER_SUPPLY

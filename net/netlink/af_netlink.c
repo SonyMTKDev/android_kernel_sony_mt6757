@@ -223,6 +223,11 @@ static int __netlink_deliver_tap_skb(struct sk_buff *skb,
 	struct sock *sk = skb->sk;
 	int ret = -ENOMEM;
 
+    if (!net_eq(dev_net(dev), sock_net(sk)) &&
+		!net_eq(dev_net(dev), &init_net)) {
+        return 0;
+    }
+
 	dev_hold(dev);
 
 	if (is_vmalloc_addr(skb->head))
@@ -2458,10 +2463,10 @@ static int netlink_seq_show(struct seq_file *seq, void *v)
 		struct sock *s = v;
 		struct netlink_sock *nlk = nlk_sk(s);
 
-		seq_printf(seq, "%pK %-3d %-6u %08x %-8d %-8d %d %-8d %-8d %-8lu\n",
+		seq_printf(seq, "%pK %-3d %-6d %08x %-8d %-8d %d %-8d %-8d %-8lu\n",
 			   s,
 			   s->sk_protocol,
-			   nlk->portid,
+			   (int)nlk->portid,
 			   nlk->groups ? (u32)nlk->groups[0] : 0,
 			   sk_rmem_alloc_get(s),
 			   sk_wmem_alloc_get(s),

@@ -25,6 +25,12 @@
 #include <linux/nmi.h>
 #include <linux/console.h>
 
+#ifdef CONFIG_CCI_KLOG
+#include <linux/mm.h>
+#include <linux/irq.h>
+#include <linux/cciklog.h>
+#endif // #ifdef CONFIG_CCI_KLOG
+
 #define PANIC_TIMER_STEP 100
 #define PANIC_BLINK_SPD 18
 
@@ -98,12 +104,49 @@ void panic(const char *fmt, ...)
 	if (!spin_trylock(&panic_lock))
 		panic_smp_self_stop();
 
+#ifndef CONFIG_CCI_KLOG
 	console_verbose();
+#endif // #ifndef CONFIG_CCI_KLOG
 	bust_spinlocks(1);
 	va_start(args, fmt);
 	vsnprintf(buf, sizeof(buf), fmt, args);
 	va_end(args);
+#ifdef CCI_KLOG_CRASH_SIZE
+#if CCI_KLOG_CRASH_SIZE
+	set_fault_state(FAULT_LEVEL_PANIC, FAULT_TYPE_NONE, buf);
+#endif // #if CCI_KLOG_CRASH_SIZE
+#endif // #ifdef CCI_KLOG_CRASH_SIZE
 	pr_emerg("Kernel panic - not syncing: %s\n", buf);
+#ifdef CONFIG_CCI_KLOG
+	cklc_save_magic(KLOG_MAGIC_AARM_PANIC, KLOG_STATE_AARM_PANIC);
+	local_irq_disable();
+	if(!oops_in_progress)//not called from die
+	{
+		struct pt_regs *regs = get_irq_regs();//only available when in intrrupt
+//modules info
+		print_modules();
+//register info
+		if(regs)
+		{
+			show_regs(regs);
+		}
+//memory info
+		show_mem(SHOW_MEM_FILTER_NODES);
+/*
+#ifndef CONFIG_DEBUG_BUGVERBOSE
+//call-stack
+		dump_stack();
+#endif // #ifndef CONFIG_DEBUG_BUGVERBOSE
+*/
+//call-stacks of all threads/processes, it will output huge amount of logs
+//		show_state();
+	}
+#ifdef CCI_KLOG_CRASH_SIZE
+#if CCI_KLOG_CRASH_SIZE
+	set_fault_state(FAULT_LEVEL_FINISH, FAULT_TYPE_NONE, "");//crash info finished, record important log only
+#endif // #if CCI_KLOG_CRASH_SIZE
+#endif // #ifdef CCI_KLOG_CRASH_SIZE
+#endif // #ifdef CONFIG_CCI_KLOG
 #ifdef CONFIG_DEBUG_BUGVERBOSE
 	/*
 	 * Avoid nested stack-dumping if a panic occurs during oops processing
@@ -184,7 +227,9 @@ void panic(const char *fmt, ...)
 		 * shutting down.  But if there is a chance of
 		 * rebooting the system it will be rebooted.
 		 */
+#ifndef CONFIG_CCI_KLOG
 		emergency_restart();
+#endif // #ifdef CONFIG_CCI_KLOG
 	}
 #ifdef __sparc__
 	{
@@ -202,8 +247,14 @@ void panic(const char *fmt, ...)
 		disabled_wait(caller);
 	}
 #endif
+#ifdef CONFIG_CCI_KLOG
+
+        emergency_restart();
+	//kernel_restart(NULL);  //this will lead to phone hang sometimes!
+#else // #ifdef CONFIG_CCI_KLOG
 	pr_emerg("---[ end Kernel panic - not syncing: %s\n", buf);
 	local_irq_enable();
+#endif // #ifdef CONFIG_CCI_KLOG
 	for (i = 0; ; i += PANIC_TIMER_STEP) {
 		touch_softlockup_watchdog();
 		if (i >= i_next) {
@@ -411,7 +462,24 @@ late_initcall(init_oops_id);
 
 void print_oops_end_marker(void)
 {
+#ifdef CCI_KLOG_CRASH_SIZE
+#if CCI_KLOG_CRASH_SIZE
+	int fault_state = get_fault_state();
+#endif // #if CCI_KLOG_CRASH_SIZE
+#endif // #ifdef CCI_KLOG_CRASH_SIZE
+
 	init_oops_id();
+
+#ifdef CCI_KLOG_CRASH_SIZE
+#if CCI_KLOG_CRASH_SIZE
+
+	if(fault_state > 0 && (fault_state & 0x10) == 0)
+	{
+		printk(KERN_ALERT "---[ end trace %016llx ]---\n", (unsigned long long)oops_id);
+	}
+	else
+#endif // #if CCI_KLOG_CRASH_SIZE
+#endif // #ifdef CCI_KLOG_CRASH_SIZE
 	pr_warn("---[ end trace %016llx ]---\n", (unsigned long long)oops_id);
 }
 
@@ -503,8 +571,11 @@ EXPORT_SYMBOL(warn_slowpath_null);
  */
 __visible void __stack_chk_fail(void)
 {
+/*
 	panic("stack-protector: Kernel stack is corrupted in: %p\n",
 		__builtin_return_address(0));
+*/
+	BUG();
 }
 EXPORT_SYMBOL(__stack_chk_fail);
 

@@ -146,7 +146,7 @@ PHONY += $(MAKECMDGOALS) sub-make
 $(filter-out _all sub-make $(CURDIR)/Makefile, $(MAKECMDGOALS)) _all: sub-make
 	@:
 
-sub-make: FORCE
+sub-make:
 	$(Q)$(MAKE) -C $(KBUILD_OUTPUT) KBUILD_SRC=$(CURDIR) \
 	-f $(CURDIR)/Makefile $(filter-out _all sub-make,$(MAKECMDGOALS))
 
@@ -301,8 +301,13 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
 
 HOSTCC       = gcc
 HOSTCXX      = g++
+ifdef CONFIG_CC_OPTIMIZE_ALOT
+HOSTCFLAGS   = -Wall -Wmissing-prototypes -Wstrict-prototypes -O3 -fgcse-lm -fgcse-sm -fsched-spec-load -fforce-addr -fsingle-precision-constant -ftree-vectorize -fomit-frame-pointer
+HOSTCXXFLAGS = -O3 -fgcse-lm -fgcse-sm -fsched-spec-load -fforce-addr -fsingle-precision-constant -mtune=cortex-a8 -marm -march=armv7-a -mfpu=neon -ftree-vectorize -mvectorize-with-neon-double
+else
 HOSTCFLAGS   = -Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer -std=gnu89
 HOSTCXXFLAGS = -O2
+endif
 
 ifeq ($(shell $(HOSTCC) -v 2>&1 | grep -c "clang version"), 1)
 HOSTCFLAGS  += -Wno-unused-value -Wno-unused-parameter \
@@ -387,7 +392,8 @@ LINUXINCLUDE    := \
 		-Iarch/$(hdr-arch)/include/generated \
 		$(if $(KBUILD_SRC), -I$(srctree)/include) \
 		-Iinclude \
-		$(USERINCLUDE)
+		$(USERINCLUDE)\
+		-I$(srctree)/drivers/misc/mediatek/include
 
 KBUILD_CPPFLAGS := -D__KERNEL__
 
@@ -397,6 +403,13 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -Wno-format-security \
 		   -std=gnu89 $(call cc-option,-fno-PIE)
 
+
+ifeq ($(findstring aarch64-linux-gnu-6.3.1, $(CROSS_COMPILE)), aarch64-linux-gnu-6.3.1)
+   KBUILD_CFLAGS += -Wno-maybe-uninitialized -Wno-array-bounds \
+            -Wno-discarded-array-qualifiers \
+            -Wno-logical-not-parentheses \
+            -Wno-misleading-indentation
+endif
 
 KBUILD_AFLAGS_KERNEL :=
 KBUILD_CFLAGS_KERNEL :=
@@ -653,7 +666,11 @@ KBUILD_CFLAGS += $(call cc-option,-fno-reorder-blocks,) \
 endif
 
 ifneq ($(CONFIG_FRAME_WARN),0)
+ifneq ($(CONFIG_KASAN), y)
 KBUILD_CFLAGS += $(call cc-option,-Wframe-larger-than=${CONFIG_FRAME_WARN})
+else
+KBUILD_CFLAGS += $(call cc-option,-Wframe-larger-than=6000)
+endif
 endif
 
 # Handle stack protector mode.
@@ -763,6 +780,49 @@ ifdef CONFIG_DYNAMIC_FTRACE
 	endif
 endif
 endif
+
+ifdef CONFIG_CCI_KLOG
+	KBUILD_CFLAGS	+= -DCCI_KLOG=y
+	ifdef CONFIG_CCI_KLOG_START_ADDR_PHYSICAL
+		KBUILD_CFLAGS	+= -DCCI_KLOG_START_ADDR_PHYSICAL=$(CONFIG_CCI_KLOG_START_ADDR_PHYSICAL)
+	endif # ifdef CONFIG_CCI_KLOG_START_ADDR_PHYSICAL
+	ifdef CONFIG_CCI_KLOG_SIZE
+		KBUILD_CFLAGS	+= -DCCI_KLOG_SIZE=$(CONFIG_CCI_KLOG_SIZE)
+	endif # ifdef CONFIG_CCI_KLOG_SIZE
+	ifdef CONFIG_CCI_KLOG_HEADER_SIZE
+		KBUILD_CFLAGS	+= -DCCI_KLOG_HEADER_SIZE=$(CONFIG_CCI_KLOG_HEADER_SIZE)
+	endif # ifdef CONFIG_CCI_KLOG_HEADER_SIZE
+	ifdef CONFIG_CCI_KLOG_CRASH_SIZE
+		KBUILD_CFLAGS	+= -DCCI_KLOG_CRASH_SIZE=$(CONFIG_CCI_KLOG_CRASH_SIZE)
+	endif # ifdef CONFIG_CCI_KLOG_CRASH_SIZE
+	ifdef CONFIG_CCI_KLOG_APPSBL_SIZE
+		KBUILD_CFLAGS	+= -DCCI_KLOG_APPSBL_SIZE=$(CONFIG_CCI_KLOG_APPSBL_SIZE)
+	endif # ifdef CONFIG_CCI_KLOG_APPSBL_SIZE
+	ifdef CONFIG_CCI_KLOG_KERNEL_SIZE
+		KBUILD_CFLAGS	+= -DCCI_KLOG_KERNEL_SIZE=$(CONFIG_CCI_KLOG_KERNEL_SIZE)
+	endif # ifdef CONFIG_CCI_KLOG_KERNEL_SIZE
+	ifdef CONFIG_CCI_KLOG_ANDROID_MAIN_SIZE
+		KBUILD_CFLAGS	+= -DCCI_KLOG_ANDROID_MAIN_SIZE=$(CONFIG_CCI_KLOG_ANDROID_MAIN_SIZE)
+	endif # ifdef CONFIG_CCI_KLOG_ANDROID_MAIN_SIZE
+	ifdef CONFIG_CCI_KLOG_ANDROID_SYSTEM_SIZE
+		KBUILD_CFLAGS	+= -DCCI_KLOG_ANDROID_SYSTEM_SIZE=$(CONFIG_CCI_KLOG_ANDROID_SYSTEM_SIZE)
+	endif # ifdef CONFIG_CCI_KLOG_ANDROID_SYSTEM_SIZE
+	ifdef CONFIG_CCI_KLOG_ANDROID_RADIO_SIZE
+		KBUILD_CFLAGS	+= -DCCI_KLOG_ANDROID_RADIO_SIZE=$(CONFIG_CCI_KLOG_ANDROID_RADIO_SIZE)
+	endif # ifdef CONFIG_CCI_KLOG_ANDROID_RADIO_SIZE
+	ifdef CONFIG_CCI_KLOG_ANDROID_EVENTS_SIZE
+		KBUILD_CFLAGS	+= -DCCI_KLOG_ANDROID_EVENTS_SIZE=$(CONFIG_CCI_KLOG_ANDROID_EVENTS_SIZE)
+	endif # ifdef CONFIG_CCI_KLOG_ANDROID_EVENTS_SIZE
+	ifdef CONFIG_CCI_KLOG_SUPPORT_CCI_ENGMODE
+		KBUILD_CFLAGS	+= -DCCI_KLOG_SUPPORT_CCI_ENGMODE=y
+	endif # ifdef CONFIG_CCI_KLOG_SUPPORT_CCI_ENGMODE
+	ifdef CONFIG_CCI_KLOG_ALLOW_FORCE_PANIC
+		KBUILD_CFLAGS	+= -DCCI_KLOG_ALLOW_FORCE_PANIC=y
+	endif # ifdef CONFIG_CCI_KLOG_ALLOW_FORCE_PANIC
+	ifdef CONFIG_CCI_KLOG_SUPPORT_RESTORATION
+		KBUILD_CFLAGS	+= -DCCI_KLOG_SUPPORT_RESTORATION=y
+	endif # ifdef CONFIG_CCI_KLOG_SUPPORT_RESTORATION
+endif # ifdef CONFIG_CCI_KLOG
 
 # We trigger additional mismatches with less inlining
 ifdef CONFIG_DEBUG_SECTION_MISMATCH
@@ -998,12 +1058,13 @@ endif
 prepare2: prepare3 outputmakefile asm-generic
 
 prepare1: prepare2 $(version_h) include/generated/utsrelease.h \
+                   include/generated/cciklog_common.h \
                    include/config/auto.conf
 	$(cmd_crmodverdir)
 
 archprepare: archheaders archscripts prepare1 scripts_basic
 
-prepare0: archprepare FORCE
+prepare0: archprepare
 	$(Q)$(MAKE) $(build)=.
 
 # All the preparing..
@@ -1030,6 +1091,15 @@ define filechk_version.h
 	echo '#define KERNEL_VERSION(a,b,c) (((a) << 16) + ((b) << 8) + (c))';)
 endef
 
+define filechk_cciklog_common.h
+	(cat $(srctree)/../vendor/cci/tools/klogcat/cciklog_common.h)
+endef
+
+include/generated/cciklog_common.h: $(srctree)/Makefile FORCE
+ifdef CONFIG_CCI_KLOG
+	$(call filechk,cciklog_common.h)
+endif # ifdef CONFIG_CCI_KLOG
+
 $(version_h): $(srctree)/Makefile FORCE
 	$(call filechk,version.h)
 	$(Q)rm -f $(old_version_h)
@@ -1048,7 +1118,7 @@ INSTALL_FW_PATH=$(INSTALL_MOD_PATH)/lib/firmware
 export INSTALL_FW_PATH
 
 PHONY += firmware_install
-firmware_install: FORCE
+firmware_install:
 	@mkdir -p $(objtree)/firmware
 	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.fwinst obj=firmware __fw_install
 
@@ -1068,7 +1138,7 @@ PHONY += archscripts
 archscripts:
 
 PHONY += __headers
-__headers: $(version_h) scripts_basic asm-generic archheaders archscripts FORCE
+__headers: $(version_h) scripts_basic asm-generic archheaders archscripts
 	$(Q)$(MAKE) $(build)=scripts build_unifdef
 
 PHONY += headers_install_all

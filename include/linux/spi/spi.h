@@ -1130,5 +1130,10 @@ spi_transfer_is_last(struct spi_master *master, struct spi_transfer *xfer)
 {
 	return list_is_last(&xfer->transfer_list, &master->cur_msg->transfers);
 }
-
+/*Cain added for Fingerprints*/
+#ifdef CONFIG_INPUT_FPC1020_IRQ
+extern void mt_spi_enable_clk(struct spi_device *spidev);
+extern void mt_spi_disable_clk(struct spi_device *spidev);
+#endif
+/*end*/
 #endif /* __LINUX_SPI_H */
